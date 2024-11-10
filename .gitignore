@@ -1,0 +1,13 @@
+node_modules
+.env.local
+*.log
+.DS_Store
+dist
+build
+coverage
+.vscode
+.idea
+postgres_data
+
+SETUP_GUIDE.md
+WORK_COMPLETED.md
