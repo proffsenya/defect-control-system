@@ -81,6 +81,14 @@ server.use(
     onProxyReq: (proxyReq, req) => {
       proxyReq.setHeader('X-Request-ID', req.id);
     },
+    onProxyRes: (proxyRes, req, res) => {
+      // Убеждаемся, что бинарные данные (изображения) передаются правильно
+      if (proxyRes.headers['content-type'] && proxyRes.headers['content-type'].startsWith('image/')) {
+        res.setHeader('Content-Type', proxyRes.headers['content-type']);
+        res.setHeader('Content-Disposition', proxyRes.headers['content-disposition'] || 'inline');
+        res.setHeader('Cache-Control', proxyRes.headers['cache-control'] || 'public, max-age=31536000');
+      }
+    },
     onError: (err, req, res) => {
       log.error({ err, requestId: req.id }, 'Proxy error to task service');
       res.status(503).json({

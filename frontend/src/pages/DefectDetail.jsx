@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ordersAPI } from '../services/api';
 import { useAuth } from '../context/AuthContext';
@@ -20,15 +20,46 @@ const statusLabels = {
 const DefectDetail = () => {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { isAdmin } = useAuth();
+  const { isAdmin, isEngineer, user } = useAuth();
   const [defect, setDefect] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [updating, setUpdating] = useState(false);
   const [newStatus, setNewStatus] = useState('');
 
+  // Фотографии
+  const [photos, setPhotos] = useState([]);
+  const [photoUrls, setPhotoUrls] = useState({});
+  const [loadingPhotos, setLoadingPhotos] = useState(false);
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const fileInputRef = useRef(null);
+
+  // Комментарии
+  const [comments, setComments] = useState([]);
+  const [loadingComments, setLoadingComments] = useState(false);
+  const [newComment, setNewComment] = useState('');
+  const [submittingComment, setSubmittingComment] = useState(false);
+  const [editingCommentId, setEditingCommentId] = useState(null);
+  const [editCommentText, setEditCommentText] = useState('');
+
+  // История изменений статуса
+  const [statusHistory, setStatusHistory] = useState([]);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+
+  const canUploadPhotos = () => {
+    return isAdmin() || isEngineer();
+  };
+
+  const canCreateComment = () => {
+    // Все кроме user могут создавать комментарии
+    return user && user.roles && !user.roles.includes('user');
+  };
+
   useEffect(() => {
     fetchDefect();
+    fetchPhotos();
+    fetchComments();
+    fetchStatusHistory();
   }, [id]);
 
   const fetchDefect = async () => {
@@ -45,6 +76,56 @@ const DefectDetail = () => {
     }
   };
 
+  const fetchPhotos = async () => {
+    setLoadingPhotos(true);
+    try {
+      const response = await ordersAPI.getPhotos(id);
+      const photosData = response.data.data;
+      setPhotos(photosData);
+      
+      // Загружаем каждую фотографию как blob и создаем URL
+      const urls = {};
+      for (const photo of photosData) {
+        try {
+          const blobResponse = await ordersAPI.getPhotoFile(photo.id);
+          const blob = blobResponse.data;
+          urls[photo.id] = URL.createObjectURL(blob);
+        } catch (err) {
+          console.error(`Ошибка загрузки фотографии ${photo.id}:`, err);
+        }
+      }
+      setPhotoUrls(urls);
+    } catch (err) {
+      console.error('Ошибка загрузки фотографий:', err);
+    } finally {
+      setLoadingPhotos(false);
+    }
+  };
+
+  const fetchComments = async () => {
+    setLoadingComments(true);
+    try {
+      const response = await ordersAPI.getComments(id);
+      setComments(response.data.data);
+    } catch (err) {
+      console.error('Ошибка загрузки комментариев:', err);
+    } finally {
+      setLoadingComments(false);
+    }
+  };
+
+  const fetchStatusHistory = async () => {
+    setLoadingHistory(true);
+    try {
+      const response = await ordersAPI.getStatusHistory(id);
+      setStatusHistory(response.data.data);
+    } catch (err) {
+      console.error('Ошибка загрузки истории статусов:', err);
+    } finally {
+      setLoadingHistory(false);
+    }
+  };
+
   const handleStatusUpdate = async () => {
     if (newStatus === defect.status) return;
 
@@ -52,6 +133,8 @@ const DefectDetail = () => {
     try {
       const response = await ordersAPI.updateStatus(id, newStatus);
       setDefect(response.data.data);
+      // Обновляем историю после изменения статуса
+      await fetchStatusHistory();
     } catch (err) {
       setError(err.response?.data?.error?.message || 'Ошибка обновления статуса');
     } finally {
@@ -71,6 +154,127 @@ const DefectDetail = () => {
     } catch (err) {
       setError(err.response?.data?.error?.message || 'Ошибка отмены дефекта');
       setUpdating(false);
+    }
+  };
+
+  const handlePhotoUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    if (!file.type.startsWith('image/')) {
+      setError('Разрешены только изображения');
+      return;
+    }
+
+    if (file.size > 10 * 1024 * 1024) {
+      setError('Размер файла не должен превышать 10MB');
+      return;
+    }
+
+    setUploadingPhoto(true);
+    setError('');
+    try {
+      const response = await ordersAPI.uploadPhoto(id, file);
+      const newPhoto = response.data.data;
+      
+      // Создаем blob URL для новой фотографии
+      try {
+        const blobResponse = await ordersAPI.getPhotoFile(newPhoto.id);
+        const blob = blobResponse.data;
+        setPhotoUrls(prev => ({
+          ...prev,
+          [newPhoto.id]: URL.createObjectURL(blob)
+        }));
+        setPhotos(prev => [...prev, newPhoto]);
+      } catch (err) {
+        console.error('Ошибка загрузки новой фотографии:', err);
+        // Все равно обновляем список фотографий
+        await fetchPhotos();
+      }
+      
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+    } catch (err) {
+      setError(err.response?.data?.error?.message || 'Ошибка загрузки фотографии');
+    } finally {
+      setUploadingPhoto(false);
+    }
+  };
+
+  const handleDeletePhoto = async (photoId) => {
+    if (!window.confirm('Вы уверены, что хотите удалить эту фотографию?')) {
+      return;
+    }
+
+    try {
+      await ordersAPI.deletePhoto(id, photoId);
+      
+      // Удаляем blob URL
+      if (photoUrls[photoId]) {
+        URL.revokeObjectURL(photoUrls[photoId]);
+        setPhotoUrls(prev => {
+          const newUrls = { ...prev };
+          delete newUrls[photoId];
+          return newUrls;
+        });
+      }
+      
+      // Удаляем из списка фотографий
+      setPhotos(prev => prev.filter(p => p.id !== photoId));
+    } catch (err) {
+      setError(err.response?.data?.error?.message || 'Ошибка удаления фотографии');
+    }
+  };
+
+  // Очистка blob URLs при размонтировании компонента
+  useEffect(() => {
+    return () => {
+      Object.values(photoUrls).forEach(url => {
+        if (url) URL.revokeObjectURL(url);
+      });
+    };
+  }, [photoUrls]);
+
+  const handleCreateComment = async () => {
+    if (!newComment.trim()) return;
+
+    setSubmittingComment(true);
+    setError('');
+    try {
+      await ordersAPI.createComment(id, newComment.trim());
+      setNewComment('');
+      await fetchComments();
+    } catch (err) {
+      setError(err.response?.data?.error?.message || 'Ошибка создания комментария');
+    } finally {
+      setSubmittingComment(false);
+    }
+  };
+
+  const handleEditComment = async (commentId) => {
+    if (!editCommentText.trim()) return;
+
+    try {
+      await ordersAPI.updateComment(id, commentId, editCommentText.trim());
+      setEditingCommentId(null);
+      setEditCommentText('');
+      await fetchComments();
+    } catch (err) {
+      setError(err.response?.data?.error?.message || 'Ошибка обновления комментария');
+    }
+  };
+
+  const handleDeleteComment = async (commentId) => {
+    if (!window.confirm('Вы уверены, что хотите удалить этот комментарий?')) {
+      return;
+    }
+
+    try {
+      await ordersAPI.deleteComment(id, commentId);
+      await fetchComments();
+    } catch (err) {
+      setError(err.response?.data?.error?.message || 'Ошибка удаления комментария');
     }
   };
 
@@ -211,6 +415,206 @@ const DefectDetail = () => {
               </div>
             </div>
 
+            {/* Фотографии */}
+            <div className="border-t border-gray-200 pt-6">
+              <div className="flex justify-between items-center mb-4">
+                <h2 className="text-lg font-medium text-gray-900">Фотографии</h2>
+                {canUploadPhotos() && (
+                  <label className="bg-primary-600 hover:bg-primary-700 text-white px-4 py-2 rounded-md font-medium cursor-pointer disabled:opacity-50">
+                    {uploadingPhoto ? 'Загрузка...' : 'Загрузить фото'}
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept="image/*"
+                      onChange={handlePhotoUpload}
+                      className="hidden"
+                      disabled={uploadingPhoto}
+                    />
+                  </label>
+                )}
+              </div>
+
+              {loadingPhotos ? (
+                <div className="text-center py-4 text-gray-500">Загрузка фотографий...</div>
+              ) : photos.length === 0 ? (
+                <div className="text-center py-4 text-gray-500">Нет загруженных фотографий</div>
+              ) : (
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
+                  {photos.map((photo) => (
+                    <div key={photo.id} className="relative group">
+                      {photoUrls[photo.id] ? (
+                        <img
+                          src={photoUrls[photo.id]}
+                          alt={photo.file_name}
+                          className="w-full h-32 object-cover rounded-lg border border-gray-200"
+                          onError={(e) => {
+                            console.error('Ошибка загрузки изображения:', photo.id);
+                            e.target.src = 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="100" height="100"%3E%3Crect width="100" height="100" fill="%23ddd"/%3E%3Ctext x="50" y="50" text-anchor="middle" dy=".3em" fill="%23999"%3EОшибка%3C/text%3E%3C/svg%3E';
+                          }}
+                        />
+                      ) : (
+                        <div className="w-full h-32 bg-gray-100 rounded-lg border border-gray-200 flex items-center justify-center">
+                          <div className="text-gray-400 text-sm">Загрузка...</div>
+                        </div>
+                      )}
+                      {canUploadPhotos() && (photo.user_id === user?.id || isAdmin()) && (
+                        <button
+                          onClick={() => handleDeletePhoto(photo.id)}
+                          className="absolute top-2 right-2 bg-red-600 text-white rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity"
+                          title="Удалить"
+                        >
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        </button>
+                      )}
+                      <div className="mt-1 text-xs text-gray-500 truncate">{photo.file_name}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* История изменений статуса */}
+            <div className="border-t border-gray-200 pt-6">
+              <h2 className="text-lg font-medium text-gray-900 mb-4">История изменений статуса</h2>
+
+              {loadingHistory ? (
+                <div className="text-center py-4 text-gray-500">Загрузка истории...</div>
+              ) : statusHistory.length === 0 ? (
+                <div className="text-center py-4 text-gray-500">История изменений пуста</div>
+              ) : (
+                <div className="space-y-3">
+                  {statusHistory.map((historyItem, index) => (
+                    <div key={historyItem.id} className="flex items-start gap-4 pb-3 border-b border-gray-100 last:border-0">
+                      <div className="flex-shrink-0 w-2 h-2 rounded-full bg-primary-600 mt-2"></div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="text-sm font-medium text-gray-900">
+                            {historyItem.old_status ? (
+                              <>
+                                <span className={`px-2 py-1 rounded text-xs ${statusColors[historyItem.old_status] || 'bg-gray-100 text-gray-800'}`}>
+                                  {statusLabels[historyItem.old_status] || historyItem.old_status}
+                                </span>
+                                <span className="mx-2 text-gray-400">→</span>
+                                <span className={`px-2 py-1 rounded text-xs ${statusColors[historyItem.new_status] || 'bg-gray-100 text-gray-800'}`}>
+                                  {statusLabels[historyItem.new_status] || historyItem.new_status}
+                                </span>
+                              </>
+                            ) : (
+                              <span className={`px-2 py-1 rounded text-xs ${statusColors[historyItem.new_status] || 'bg-gray-100 text-gray-800'}`}>
+                                Создан со статусом: {statusLabels[historyItem.new_status] || historyItem.new_status}
+                              </span>
+                            )}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2 text-xs text-gray-500">
+                          <span>{historyItem.user_name || 'Неизвестный пользователь'}</span>
+                          <span>•</span>
+                          <span>{formatDate(historyItem.created_at)}</span>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Комментарии */}
+            <div className="border-t border-gray-200 pt-6">
+              <h2 className="text-lg font-medium text-gray-900 mb-4">Комментарии</h2>
+
+              {canCreateComment() && (
+                <div className="mb-6">
+                  <textarea
+                    value={newComment}
+                    onChange={(e) => setNewComment(e.target.value)}
+                    placeholder="Напишите комментарий..."
+                    rows={3}
+                    className="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm"
+                  />
+                  <button
+                    onClick={handleCreateComment}
+                    disabled={!newComment.trim() || submittingComment}
+                    className="mt-2 bg-primary-600 hover:bg-primary-700 text-white px-4 py-2 rounded-md font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {submittingComment ? 'Отправка...' : 'Отправить комментарий'}
+                  </button>
+                </div>
+              )}
+
+              {loadingComments ? (
+                <div className="text-center py-4 text-gray-500">Загрузка комментариев...</div>
+              ) : comments.length === 0 ? (
+                <div className="text-center py-4 text-gray-500">Нет комментариев</div>
+              ) : (
+                <div className="space-y-4">
+                  {comments.map((comment) => (
+                    <div key={comment.id} className="border border-gray-200 rounded-lg p-4">
+                      {editingCommentId === comment.id ? (
+                        <div>
+                          <textarea
+                            value={editCommentText}
+                            onChange={(e) => setEditCommentText(e.target.value)}
+                            rows={3}
+                            className="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm mb-2"
+                          />
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => handleEditComment(comment.id)}
+                              className="bg-primary-600 hover:bg-primary-700 text-white px-3 py-1 rounded text-sm"
+                            >
+                              Сохранить
+                            </button>
+                            <button
+                              onClick={() => {
+                                setEditingCommentId(null);
+                                setEditCommentText('');
+                              }}
+                              className="bg-gray-200 hover:bg-gray-300 text-gray-700 px-3 py-1 rounded text-sm"
+                            >
+                              Отмена
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="flex justify-between items-start mb-2">
+                            <div>
+                              <p className="font-medium text-gray-900">{comment.user_name || 'Неизвестный'}</p>
+                              <p className="text-sm text-gray-500">{formatDate(comment.created_at)}</p>
+                            </div>
+                            {(comment.user_id === user?.id || isAdmin()) && (
+                              <div className="flex gap-2">
+                                {comment.user_id === user?.id && (
+                                  <button
+                                    onClick={() => {
+                                      setEditingCommentId(comment.id);
+                                      setEditCommentText(comment.comment_text);
+                                    }}
+                                    className="text-primary-600 hover:text-primary-700 text-sm"
+                                  >
+                                    Редактировать
+                                  </button>
+                                )}
+                                <button
+                                  onClick={() => handleDeleteComment(comment.id)}
+                                  className="text-red-600 hover:text-red-700 text-sm"
+                                >
+                                  Удалить
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                          <p className="text-gray-700 whitespace-pre-wrap">{comment.comment_text}</p>
+                        </>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
             <div className="border-t border-gray-200 pt-6">
               <h2 className="text-lg font-medium text-gray-900 mb-4">Управление статусом</h2>
               <div className="flex gap-4 items-end">
@@ -264,4 +668,3 @@ const DefectDetail = () => {
 };
 
 export default DefectDetail;
-

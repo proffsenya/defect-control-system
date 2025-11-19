@@ -4,10 +4,8 @@
 
 Сервис заказов публикует доменные события при изменении состояния заказов. События используются для:
 
-- Логирования изменений
 - Интеграции с другими сервисами
 - Аудита операций
-- Будущей интеграции с брокером сообщений (RabbitMQ/Kafka)
 
 ## Архитектура
 
@@ -182,51 +180,3 @@ console.log('Всего событий:', queuedEvents.length);
 
 eventBus.clearQueue();
 ```
-
-## Расширение
-
-Чтобы добавить новое событие:
-
-1. Добавьте константу в `events/eventTypes.js`:
-```javascript
-ORDER_SHIPPED: 'order.shipped',
-```
-
-2. Создайте handler в `events/handlers/`:
-```javascript
-const handleOrderShipped = (event) => {
-  logger.info({ event }, 'Order shipped');
-};
-```
-
-3. Зарегистрируйте handler в `events/registerHandlers.js`:
-```javascript
-eventBus.subscribe(eventTypes.ORDER_SHIPPED, handleOrderShipped);
-```
-
-4. Публикуйте событие в нужном месте:
-```javascript
-eventBus.publish(eventTypes.ORDER_SHIPPED, {
-  orderId: order.id,
-  trackingNumber: '123456789',
-});
-```
-
-## Тестирование
-
-Проверить работу событий можно создав заказ:
-
-```bash
-TOKEN=$(curl -s -X POST http://localhost:3000/v1/users/login \
-  -H "Content-Type: application/json" \
-  -d '{"email":"test@example.com","password":"password123"}' \
-  | jq -r '.data.token')
-
-curl -X POST http://localhost:3000/v1/orders \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $TOKEN" \
-  -d '{"items":[{"name":"Тест","quantity":1,"price":100}]}'
-
-docker-compose logs service_orders --tail 20 | grep event
-```
-

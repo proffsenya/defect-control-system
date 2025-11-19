@@ -87,6 +87,23 @@ router.post('/', validateAuthToken, async (req, res, next) => {
       [taskId, req.user.user_id, assignedToUserId, JSON.stringify(items), 'created', total]
     );
 
+    // Записываем начальный статус в историю
+    try {
+      const initialHistoryId = uuidv4();
+      await dbConnection.query(
+        `INSERT INTO defect_status_history (id, order_id, user_id, old_status, new_status, created_at)
+         VALUES ($1, $2, $3, NULL, $4, NOW())`,
+        [initialHistoryId, taskId, req.user.user_id, 'created']
+      );
+    } catch (historyError) {
+      // Если таблица не существует, просто логируем и продолжаем
+      if (historyError.code === '42P01') {
+        console.warn('Таблица defect_status_history не существует, пропускаем запись в историю');
+      } else {
+        console.error('Ошибка при записи в историю статусов:', historyError);
+      }
+    }
+
     const result = await dbConnection.query(
       `SELECT o.*, u.name as assigned_to_name, u.email as assigned_to_email 
        FROM orders o 
@@ -162,6 +179,102 @@ router.get('/:id', validateAuthToken, async (req, res, next) => {
       success: true,
       data: task,
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Экспорт в Excel (должен быть определен перед /:id роутами)
+router.get('/export/excel', validateAuthToken, async (req, res, next) => {
+  try {
+    if (!req.user.roles || (!req.user.roles.includes('manager') && !req.user.roles.includes('admin'))) {
+      return res.status(403).json({
+        success: false,
+        error: {
+          code: 'FORBIDDEN',
+          message: 'Access denied',
+        },
+      });
+    }
+
+    const status = req.query.status;
+    const sortBy = req.query.sortBy || 'created_at';
+    const sortOrder = req.query.sortOrder === 'asc' ? 'ASC' : 'DESC';
+
+    const validSortFields = ['created_at', 'updated_at', 'total', 'status'];
+    const orderBy = validSortFields.includes(sortBy) ? sortBy : 'created_at';
+
+    let query = `SELECT o.*, u.name as assigned_to_name, u.email as assigned_to_email 
+                 FROM orders o 
+                 LEFT JOIN users u ON o.assigned_to = u.id`;
+    const values = [];
+    let whereConditions = [];
+
+    if (status) {
+      whereConditions.push(`o.status = $${values.length + 1}`);
+      values.push(status);
+    }
+
+    if (whereConditions.length > 0) {
+      query += ' WHERE ' + whereConditions.join(' AND ');
+    }
+
+    query += ` ORDER BY o.${orderBy} ${sortOrder}`;
+
+    const tasksResult = await dbConnection.query(query, values);
+    const tasks = tasksResult.rows;
+
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('Дефекты');
+
+    worksheet.columns = [
+      { header: 'ID', key: 'id', width: 36 },
+      { header: 'Статус', key: 'status', width: 15 },
+      { header: 'Инженер', key: 'assigned_to_name', width: 25 },
+      { header: 'Email инженера', key: 'assigned_to_email', width: 30 },
+      { header: 'Количество элементов', key: 'items_count', width: 20 },
+      { header: 'Сумма', key: 'total', width: 15 },
+      { header: 'Дата создания', key: 'created_at', width: 20 },
+      { header: 'Дата обновления', key: 'updated_at', width: 20 },
+    ];
+
+    worksheet.getRow(1).font = { bold: true };
+    worksheet.getRow(1).fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FFE0E0E0' },
+    };
+
+    tasks.forEach((task) => {
+      const items = Array.isArray(task.items) ? task.items : [];
+      worksheet.addRow({
+        id: task.id,
+        status: task.status === 'created' ? 'Создан' :
+                task.status === 'in_progress' ? 'В работе' :
+                task.status === 'completed' ? 'Завершен' :
+                task.status === 'cancelled' ? 'Отменен' : task.status,
+        assigned_to_name: task.assigned_to_name || 'Не назначен',
+        assigned_to_email: task.assigned_to_email || '',
+        items_count: items.length,
+        total: parseFloat(task.total),
+        created_at: new Date(task.created_at).toLocaleString('ru-RU'),
+        updated_at: new Date(task.updated_at).toLocaleString('ru-RU'),
+      });
+    });
+
+    worksheet.getColumn('total').numFmt = '#,##0.00 ₽';
+
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    );
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename=defects_${new Date().toISOString().split('T')[0]}.xlsx`
+    );
+
+    await workbook.xlsx.write(res);
+    res.end();
   } catch (error) {
     next(error);
   }
@@ -271,6 +384,23 @@ router.patch('/:id/status', validateAuthToken, async (req, res, next) => {
       [status, id]
     );
 
+    // Записываем изменение статуса в историю
+    try {
+      const historyId = uuidv4();
+      await dbConnection.query(
+        `INSERT INTO defect_status_history (id, order_id, user_id, old_status, new_status, created_at)
+         VALUES ($1, $2, $3, $4, $5, NOW())`,
+        [historyId, id, req.user.user_id, oldStatus, status]
+      );
+    } catch (historyError) {
+      // Если таблица не существует, просто логируем и продолжаем
+      if (historyError.code === '42P01') {
+        console.warn('Таблица defect_status_history не существует, пропускаем запись в историю');
+      } else {
+        console.error('Ошибка при записи в историю статусов:', historyError);
+      }
+    }
+
     const result = await dbConnection.query(
       `SELECT o.*, u.name as assigned_to_name, u.email as assigned_to_email 
        FROM orders o 
@@ -348,6 +478,23 @@ router.delete('/:id', validateAuthToken, async (req, res, next) => {
       ['cancelled', id]
     );
 
+    // Записываем отмену в историю
+    try {
+      const cancelHistoryId = uuidv4();
+      await dbConnection.query(
+        `INSERT INTO defect_status_history (id, order_id, user_id, old_status, new_status, created_at)
+         VALUES ($1, $2, $3, $4, $5, NOW())`,
+        [cancelHistoryId, id, req.user.user_id, oldStatus, 'cancelled']
+      );
+    } catch (historyError) {
+      // Если таблица не существует, просто логируем и продолжаем
+      if (historyError.code === '42P01') {
+        console.warn('Таблица defect_status_history не существует, пропускаем запись в историю');
+      } else {
+        console.error('Ошибка при записи в историю статусов:', historyError);
+      }
+    }
+
     eventDispatcher.emitEvent(EVENT_TYPES.TASK_CANCELLED, {
       orderId: task.id,
       userId: task.user_id,
@@ -363,6 +510,73 @@ router.delete('/:id', validateAuthToken, async (req, res, next) => {
       },
     });
   } catch (error) {
+    next(error);
+  }
+});
+
+// Получение истории изменений статуса дефекта
+router.get('/:id/status-history', validateAuthToken, async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    // Проверяем существование дефекта и права доступа
+    const taskResult = await dbConnection.query(
+      'SELECT * FROM orders WHERE id = $1',
+      [id]
+    );
+
+    if (taskResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: {
+          code: 'ORDER_NOT_FOUND',
+          message: 'Order not found',
+        },
+      });
+    }
+
+    const task = taskResult.rows[0];
+
+    if (!hasViewAccess(req.user, task)) {
+      return res.status(403).json({
+        success: false,
+        error: {
+          code: 'FORBIDDEN',
+          message: 'Access denied',
+        },
+      });
+    }
+
+    // Получаем историю изменений статуса
+    // Используем IF EXISTS для проверки существования таблицы
+    let historyResult;
+    try {
+      historyResult = await dbConnection.query(
+        `SELECT dsh.*, u.name as user_name, u.email as user_email
+         FROM defect_status_history dsh
+         LEFT JOIN users u ON dsh.user_id = u.id
+         WHERE dsh.order_id = $1
+         ORDER BY dsh.created_at DESC`,
+        [id]
+      );
+    } catch (dbError) {
+      // Если таблица не существует, возвращаем пустой массив
+      if (dbError.code === '42P01') { // relation does not exist
+        console.warn('Таблица defect_status_history не существует, возвращаем пустую историю');
+        return res.json({
+          success: true,
+          data: [],
+        });
+      }
+      throw dbError;
+    }
+
+    res.json({
+      success: true,
+      data: historyResult.rows,
+    });
+  } catch (error) {
+    console.error('Ошибка при получении истории статусов:', error);
     next(error);
   }
 });

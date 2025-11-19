@@ -55,6 +55,26 @@ export const ordersAPI = {
   updateStatus: (id, status) => api.patch(`/v1/orders/${id}/status`, { status }),
   cancel: (id) => api.delete(`/v1/orders/${id}`),
   exportExcel: (params) => api.get('/v1/orders/export/excel', { params, responseType: 'blob' }),
+  // Фотографии
+  uploadPhoto: (orderId, file) => {
+    const formData = new FormData();
+    formData.append('photo', file);
+    return api.post(`/v1/orders/${orderId}/photos`, formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    });
+  },
+  getPhotos: (orderId) => api.get(`/v1/orders/${orderId}/photos`),
+  deletePhoto: (orderId, photoId) => api.delete(`/v1/orders/${orderId}/photos/${photoId}`),
+  getPhotoFile: (photoId) => api.get(`/v1/orders/photos/${photoId}/file`, { responseType: 'blob' }),
+  // Комментарии
+  createComment: (orderId, commentText) => api.post(`/v1/orders/${orderId}/comments`, { comment_text: commentText }),
+  getComments: (orderId) => api.get(`/v1/orders/${orderId}/comments`),
+  updateComment: (orderId, commentId, commentText) => api.patch(`/v1/orders/${orderId}/comments/${commentId}`, { comment_text: commentText }),
+  deleteComment: (orderId, commentId) => api.delete(`/v1/orders/${orderId}/comments/${commentId}`),
+  // История изменений статуса
+  getStatusHistory: (orderId) => api.get(`/v1/orders/${orderId}/status-history`),
 };
 
 export default api;
