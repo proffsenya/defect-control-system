@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ordersAPI } from '../services/api';
 import { useAuth } from '../context/AuthContext';
@@ -27,13 +27,6 @@ const DefectDetail = () => {
   const [updating, setUpdating] = useState(false);
   const [newStatus, setNewStatus] = useState('');
 
-  // Фотографии
-  const [photos, setPhotos] = useState([]);
-  const [photoUrls, setPhotoUrls] = useState({});
-  const [loadingPhotos, setLoadingPhotos] = useState(false);
-  const [uploadingPhoto, setUploadingPhoto] = useState(false);
-  const fileInputRef = useRef(null);
-
   // Комментарии
   const [comments, setComments] = useState([]);
   const [loadingComments, setLoadingComments] = useState(false);
@@ -46,10 +39,6 @@ const DefectDetail = () => {
   const [statusHistory, setStatusHistory] = useState([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
 
-  const canUploadPhotos = () => {
-    return isAdmin() || isEngineer();
-  };
-
   const canCreateComment = () => {
     // Все кроме user могут создавать комментарии
     return user && user.roles && !user.roles.includes('user');
@@ -57,7 +46,6 @@ const DefectDetail = () => {
 
   useEffect(() => {
     fetchDefect();
-    fetchPhotos();
     fetchComments();
     fetchStatusHistory();
   }, [id]);
@@ -73,32 +61,6 @@ const DefectDetail = () => {
       setError(err.response?.data?.error?.message || 'Ошибка загрузки дефекта');
     } finally {
       setLoading(false);
-    }
-  };
-
-  const fetchPhotos = async () => {
-    setLoadingPhotos(true);
-    try {
-      const response = await ordersAPI.getPhotos(id);
-      const photosData = response.data.data;
-      setPhotos(photosData);
-      
-      // Загружаем каждую фотографию как blob и создаем URL
-      const urls = {};
-      for (const photo of photosData) {
-        try {
-          const blobResponse = await ordersAPI.getPhotoFile(photo.id);
-          const blob = blobResponse.data;
-          urls[photo.id] = URL.createObjectURL(blob);
-        } catch (err) {
-          console.error(`Ошибка загрузки фотографии ${photo.id}:`, err);
-        }
-      }
-      setPhotoUrls(urls);
-    } catch (err) {
-      console.error('Ошибка загрузки фотографий:', err);
-    } finally {
-      setLoadingPhotos(false);
     }
   };
 
@@ -156,85 +118,6 @@ const DefectDetail = () => {
       setUpdating(false);
     }
   };
-
-  const handlePhotoUpload = async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-
-    if (!file.type.startsWith('image/')) {
-      setError('Разрешены только изображения');
-      return;
-    }
-
-    if (file.size > 10 * 1024 * 1024) {
-      setError('Размер файла не должен превышать 10MB');
-      return;
-    }
-
-    setUploadingPhoto(true);
-    setError('');
-    try {
-      const response = await ordersAPI.uploadPhoto(id, file);
-      const newPhoto = response.data.data;
-      
-      // Создаем blob URL для новой фотографии
-      try {
-        const blobResponse = await ordersAPI.getPhotoFile(newPhoto.id);
-        const blob = blobResponse.data;
-        setPhotoUrls(prev => ({
-          ...prev,
-          [newPhoto.id]: URL.createObjectURL(blob)
-        }));
-        setPhotos(prev => [...prev, newPhoto]);
-      } catch (err) {
-        console.error('Ошибка загрузки новой фотографии:', err);
-        // Все равно обновляем список фотографий
-        await fetchPhotos();
-      }
-      
-      if (fileInputRef.current) {
-        fileInputRef.current.value = '';
-      }
-    } catch (err) {
-      setError(err.response?.data?.error?.message || 'Ошибка загрузки фотографии');
-    } finally {
-      setUploadingPhoto(false);
-    }
-  };
-
-  const handleDeletePhoto = async (photoId) => {
-    if (!window.confirm('Вы уверены, что хотите удалить эту фотографию?')) {
-      return;
-    }
-
-    try {
-      await ordersAPI.deletePhoto(id, photoId);
-      
-      // Удаляем blob URL
-      if (photoUrls[photoId]) {
-        URL.revokeObjectURL(photoUrls[photoId]);
-        setPhotoUrls(prev => {
-          const newUrls = { ...prev };
-          delete newUrls[photoId];
-          return newUrls;
-        });
-      }
-      
-      // Удаляем из списка фотографий
-      setPhotos(prev => prev.filter(p => p.id !== photoId));
-    } catch (err) {
-      setError(err.response?.data?.error?.message || 'Ошибка удаления фотографии');
-    }
-  };
-
-  // Очистка blob URLs при размонтировании компонента
-  useEffect(() => {
-    return () => {
-      Object.values(photoUrls).forEach(url => {
-        if (url) URL.revokeObjectURL(url);
-      });
-    };
-  }, [photoUrls]);
 
   const handleCreateComment = async () => {
     if (!newComment.trim()) return;
@@ -413,66 +296,6 @@ const DefectDetail = () => {
                   </tfoot>
                 </table>
               </div>
-            </div>
-
-            {/* Фотографии */}
-            <div className="border-t border-gray-200 pt-6">
-              <div className="flex justify-between items-center mb-4">
-                <h2 className="text-lg font-medium text-gray-900">Фотографии</h2>
-                {canUploadPhotos() && (
-                  <label className="bg-primary-600 hover:bg-primary-700 text-white px-4 py-2 rounded-md font-medium cursor-pointer disabled:opacity-50">
-                    {uploadingPhoto ? 'Загрузка...' : 'Загрузить фото'}
-                    <input
-                      ref={fileInputRef}
-                      type="file"
-                      accept="image/*"
-                      onChange={handlePhotoUpload}
-                      className="hidden"
-                      disabled={uploadingPhoto}
-                    />
-                  </label>
-                )}
-              </div>
-
-              {loadingPhotos ? (
-                <div className="text-center py-4 text-gray-500">Загрузка фотографий...</div>
-              ) : photos.length === 0 ? (
-                <div className="text-center py-4 text-gray-500">Нет загруженных фотографий</div>
-              ) : (
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
-                  {photos.map((photo) => (
-                    <div key={photo.id} className="relative group">
-                      {photoUrls[photo.id] ? (
-                        <img
-                          src={photoUrls[photo.id]}
-                          alt={photo.file_name}
-                          className="w-full h-32 object-cover rounded-lg border border-gray-200"
-                          onError={(e) => {
-                            console.error('Ошибка загрузки изображения:', photo.id);
-                            e.target.src = 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="100" height="100"%3E%3Crect width="100" height="100" fill="%23ddd"/%3E%3Ctext x="50" y="50" text-anchor="middle" dy=".3em" fill="%23999"%3EОшибка%3C/text%3E%3C/svg%3E';
-                          }}
-                        />
-                      ) : (
-                        <div className="w-full h-32 bg-gray-100 rounded-lg border border-gray-200 flex items-center justify-center">
-                          <div className="text-gray-400 text-sm">Загрузка...</div>
-                        </div>
-                      )}
-                      {canUploadPhotos() && (photo.user_id === user?.id || isAdmin()) && (
-                        <button
-                          onClick={() => handleDeletePhoto(photo.id)}
-                          className="absolute top-2 right-2 bg-red-600 text-white rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity"
-                          title="Удалить"
-                        >
-                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                          </svg>
-                        </button>
-                      )}
-                      <div className="mt-1 text-xs text-gray-500 truncate">{photo.file_name}</div>
-                    </div>
-                  ))}
-                </div>
-              )}
             </div>
 
             {/* История изменений статуса */}
