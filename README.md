@@ -232,18 +232,16 @@ Defect-system-control/
 
 **Итого:** 25+ автоматических тестов (Jest/Vitest) + Postman коллекция + E2E bash-скрипт
 
+## Тестирование
+service_users
+<img width="548" height="561" alt="image" src="https://github.com/user-attachments/assets/031ad11a-49f7-4bbe-9545-2b0afb9488a6" />
 
-### Юнит-тесты
+service_orders
+<img width="608" height="624" alt="image" src="https://github.com/user-attachments/assets/29237eed-17f1-4de8-a400-7d0074e28e6d" />
 
-```bash
-# Service Users
-cd service_users && npm install && npm test
+api_gateway
+<img width="595" height="381" alt="image" src="https://github.com/user-attachments/assets/bc71e1ff-f931-4390-8eb2-929b6fe63a51" />
 
-# Service Orders
-cd service_orders && npm install && npm test
-
-# Frontend
-cd frontend && npm install && npm test
 ```
 
 **Что покрывают:**
